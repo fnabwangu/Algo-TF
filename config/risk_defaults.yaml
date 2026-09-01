@@ -1,0 +1,2 @@
+max_loss_buffer: 0.95
+max_slippage_bps: 20

@@ -1,2 +1,7 @@
 # Algo-TF
-Hedge Hog Algorithmic Trading Formula Generator for Agentic Trading
+
+Algo-TF is a deterministic, mandate-bound adaptive execution service.
+
+## Boundary rule
+
+**RESEARCH MAY PROPOSE. TRADE-TF MAY AUTHORIZE A STRATEGY. ALGO-TF MAY ADAPT EXECUTION WITHIN THE MANDATE. THE EXECUTION ENGINE ALONE MAY CROSS THE BROKER BOUNDARY. NO SCORE, MODEL, OR LLM MAY OVERRIDE A FAILED HARD GATE.**
