@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "mandate_id",
+    "strategy_id",
+    "strategy_version",
+    "sleeve_element_id",
+    "instrument",
+    "asset_class",
+    "direction",
+    "allowed_actions",
+    "expires_at"
+  ],
+  "properties": {
+    "mandate_id": {
+      "type": "string"
+    },
+    "strategy_id": {
+      "type": "string"
+    },
+    "strategy_version": {
+      "type": "integer"
+    },
+    "sleeve_element_id": {
+      "type": "string"
+    },
+    "instrument": {
+      "type": "string"
+    },
+    "asset_class": {
+      "type": "string"
+    },
+    "direction": {
+      "type": "string"
+    },
+    "allowed_actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

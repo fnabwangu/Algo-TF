@@ -1,0 +1,2 @@
+policy: ADAPTIVE_LIMIT_V1
+min_replace_interval_seconds: 5
