@@ -15,6 +15,8 @@ def test_required_endpoints_exist_and_no_order_verb_endpoints() -> None:
         '/health',
         '/ready',
         '/mandates',
+        '/mandates/design-bundles',
+        '/mandates/{mandate_id}/approve',
         '/mandates/{mandate_id}/arm',
         '/mandates/{mandate_id}/pause',
         '/mandates/{mandate_id}/revoke',
@@ -66,6 +68,18 @@ def test_mandate_ingest_and_arm_flow() -> None:
 
     ingest = client.post('/mandates', json=payload, headers=headers)
     assert ingest.status_code == 200
+    assert ingest.json()['state'] == 'PENDING_APPROVAL'
+    approval = client.post(
+        '/mandates/m-int-1/approve',
+        json={
+            'approved_by': 'integration-test',
+            'effective_at': (now - timedelta(minutes=1)).isoformat(),
+            'expires_at': (now + timedelta(minutes=10)).isoformat(),
+            'target_remaining_quantity': 10,
+        },
+        headers=headers,
+    )
+    assert approval.status_code == 200
     arm = client.post('/mandates/m-int-1/arm', headers=headers)
     assert arm.status_code == 200
     state = client.get('/mandates/m-int-1/state', headers=headers)

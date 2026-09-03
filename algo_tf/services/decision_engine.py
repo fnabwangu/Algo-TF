@@ -90,7 +90,26 @@ class DecisionEngine:
             limit_price = None
             reasons = ("SIZE_ZERO",)
         else:
-            action = Action.ENTER if Action.ENTER in mandate.allowed_actions else Action.SCALE_IN
+            allowed_entry_actions = {Action.ENTER, Action.SCALE_IN} & set(mandate.allowed_actions)
+            if not allowed_entry_actions:
+                return AlgorithmDecision(
+                    decision_id=str(uuid.uuid4()),
+                    mandate_id=mandate.mandate_id,
+                    strategy_id=mandate.strategy_id,
+                    strategy_version=mandate.strategy_version,
+                    action=Action.WAIT,
+                    requested_quantity=0,
+                    limit_price=None,
+                    gate_results={**gate_results, "action_allowed": False},
+                    reason_codes=("ACTION_NOT_PERMITTED",),
+                    policy_name=self.policy_name,
+                    policy_version=self.policy_version,
+                    created_at=now,
+                    expires_at=now + timedelta(seconds=30),
+                    observation_digest=digest_payload(asdict(obs)),
+                    deterministic_input_hash=input_hash,
+                )
+            action = Action.ENTER if Action.ENTER in allowed_entry_actions else Action.SCALE_IN
             limit_price = derive_limit_price(
                 bid=obs.bid,
                 ask=obs.ask,
