@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Algo-TF Review</title>
+  <style>
+    :root { --ink:#17222c; --paper:#f6f7f3; --line:#cbd3cc; --teal:#007d72; --red:#b33e3e; --gold:#a66a00; }
+    * { box-sizing:border-box; } body { margin:0; background:linear-gradient(135deg,#e8f2ec,#f8f4e9); color:var(--ink); font:16px Georgia,serif; }
+    main { max-width:1150px; margin:auto; padding:28px 20px 48px; } header { display:flex; justify-content:space-between; align-items:baseline; border-bottom:2px solid var(--ink); }
+    h1 { letter-spacing:0; margin:0 0 12px; font-size:30px; } h2 { font-size:18px; margin:0 0 10px; } .meta, small { font-family:ui-monospace,monospace; font-size:12px; }
+    .grid { display:grid; grid-template-columns:1.2fr .8fr; gap:18px; margin-top:20px; } section { border:1px solid var(--line); border-radius:6px; background:#fffdf8; padding:17px; }
+    .action { color:var(--teal); font-size:32px; margin:2px 0; } .size { font-size:21px; } .notice { padding:10px; background:#fff3d8; border-left:4px solid var(--gold); }
+    ul { padding-left:20px; margin:8px 0; } li { margin:6px 0; } table { width:100%; border-collapse:collapse; font-family:ui-monospace,monospace; font-size:12px; } th,td { text-align:left; vertical-align:top; padding:8px 5px; border-bottom:1px solid var(--line); }
+    .wide { grid-column:1/-1; overflow:auto; } .state-MISSING,.state-STALE,.state-CONFLICTING { color:var(--red); font-weight:bold; } button { border:1px solid var(--ink); border-radius:4px; background:#fffdf8; padding:8px 10px; cursor:pointer; font:inherit; } button.primary { background:var(--teal); color:white; } input,select { padding:7px; border:1px solid var(--line); border-radius:3px; font:inherit; max-width:100%; } #status { min-height:20px; color:var(--teal); } a { color:#006b9d; } @media(max-width:720px) { .grid{grid-template-columns:1fr;} header{display:block;} }
+  </style>
+</head>
+<body><main>
+  <header><h1>Algo-TF / Decision Review</h1><p id="mode" class="meta"></p></header>
+  <div class="grid">
+    <section><h2>Strategy Recommendation</h2><div id="action" class="action"></div><div id="size" class="size"></div><p id="rationale"></p><div id="execution" class="notice"></div></section>
+    <section><h2>Human Decision</h2><p class="meta">Bound to the displayed decision and dataset snapshot.</p><label>Action <select id="review-action"><option>APPROVE</option><option>RESIZE</option><option>HOLD</option><option>REJECT</option><option>REQUEST_EVIDENCE</option></select></label><br><br><label>Size <input id="review-size" type="number" min="0" step="0.01"></label><br><br><button class="primary" onclick="submitReview()">Record review</button><p id="status"></p><a href="/download/decision.json" download>Download decision JSON</a> · <a href="/api/decision/data" download>Download supporting data</a></section>
+    <section><h2>Former Gates, Now Evidence</h2><div id="missing"></div><h2>Supporting Factors</h2><ul id="support"></ul><h2>Opposing Factors</h2><ul id="oppose"></ul></section>
+    <section><h2>Probability & Uncertainty</h2><div id="probability"></div><h2>Agents & Open Questions</h2><div id="agents"></div></section>
+    <section class="wide"><h2>Supporting Dataset</h2><p class="meta">Only observations available at the decision cutoff are present. This page uses clearly labeled synthetic fixture data.</p><table><thead><tr><th>Field</th><th>Value</th><th>Label/state</th><th>Source</th><th>Event time</th><th>Available at</th><th>Effect / missing fields</th></tr></thead><tbody id="evidence"></tbody></table></section>
+  </div>
+</main><script>
+let view;
+const text = (id, value) => document.getElementById(id).textContent = value;
+const list = (id, values) => document.getElementById(id).innerHTML = values.map(v => `<li>${v}</li>`).join('') || '<li>None recorded.</li>';
+const fmt = value => value ? new Date(value).toISOString() : 'not supplied';
+function render(data) {
+  view=data; const d=data.decision; text('mode', `${data.mode} | ${d.decision_id} | snapshot ${d.snapshot.snapshot_id}`); text('action',d.action); text('size',`Proposed size: ${d.quantity}`); text('rationale',d.rationale);
+  text('execution', d.execution_feasible ? `Execution feasible under current constraints. Pricing: review broker quote at execution.` : `Execution infeasible: ${d.execution_issues.join(' ')}`);
+  list('support',d.supporting_factors); list('oppose',d.opposing_factors); list('missing',d.missing_data_implications.map(v => `Former gate condition: ${v} Dynamic treatment: reduced uncertainty or size, not an automatic WAIT.`));
+  if (d.initial_recommendation) document.getElementById('agents').innerHTML = `<p>Initial recommendation: <b>${d.initial_recommendation.action}</b> / ${d.initial_recommendation.quantity}; ${d.initial_recommendation.reason}</p>`;
+  document.getElementById('probability').innerHTML=d.probabilities.map(p => `<p><b>${p.kind}</b>: ${p.probability == null ? 'UNAVAILABLE' : (p.probability*100).toFixed(1)+'%'}</p><p>${p.event}; ${p.horizon}<br>${p.method}<br>n=${p.sample_size ?? 'n/a'}; interval=${p.interval ? p.interval.map(x=>(x*100).toFixed(1)+'%').join(' to ') : 'n/a'}<br>${p.limitations}</p>`).join('');
+  document.getElementById('agents').innerHTML += d.agent_results.map(a => `<p><b>${a.agent}</b>: ${a.timed_out?'TIMEOUT':a.error?'ERROR':a.response}</p>`).join('') + d.information_requests.map(r=>`<p>Requested: ${r.question}<br><small>Deadline ${fmt(r.deadline)}; ${r.expected_effect}</small></p>`).join('');
+  document.getElementById('evidence').innerHTML=d.snapshot.observations.map(o=>`<tr><td>${o.name}</td><td>${o.value ?? 'missing'}</td><td class="state-${o.state}">${o.label} / ${o.state}</td><td>${o.source_url?`<a href="${o.source_url}">${o.source}</a>`:o.source}</td><td>${fmt(o.event_time)}</td><td>${fmt(o.available_at)}</td><td>${o.effect}${o.missing_fields.length?` (${o.missing_fields.join(', ')})`:''}</td></tr>`).join('');
+}
+async function submitReview() { const body={decision_id:view.decision.decision_id,snapshot_id:view.decision.snapshot.snapshot_id,action:document.getElementById('review-action').value,quantity:Number(document.getElementById('review-size').value),reviewer:'local reviewer'}; const response=await fetch('/api/reviews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const data=await response.json(); text('status',response.ok ? `Review ${data.status}.` : data.error); }
+fetch('/api/decision').then(r=>r.json()).then(render).catch(e=>text('status',`Could not load decision: ${e}`));
+</script></body></html>
