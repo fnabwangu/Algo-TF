@@ -43,6 +43,12 @@ class Action(str, Enum):
     WAIT = "WAIT"
 
 
+class DecisionBranch(str, Enum):
+    AUTO_EXECUTE = "AUTO_EXECUTE"
+    REJECT = "REJECT"
+    ESCALATE = "ESCALATE"
+
+
 class ReviewAction(str, Enum):
     APPROVE = "APPROVE"
     RESIZE = "RESIZE"
@@ -85,6 +91,35 @@ class ProbabilityEstimate:
     downside: float | None = None
     transaction_cost_assumption: str | None = None
     limitations: str = ""
+
+
+@dataclass(frozen=True)
+class ConfidenceScore:
+    value: float
+    reasoning: str
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.value <= 1.0:
+            raise ValueError("Confidence scores must be between 0.0 and 1.0.")
+
+
+@dataclass(frozen=True)
+class JudgmentSignal:
+    agent: str
+    confidence: ConfidenceScore
+    weight: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.weight < 0:
+            raise ValueError("Signal weights cannot be negative.")
+
+
+@dataclass(frozen=True)
+class ProbabilisticConsensus:
+    signals: tuple[JudgmentSignal, ...]
+    final_conviction_score: float
+    branch: DecisionBranch
+    human_escalation_summary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -194,6 +229,7 @@ class DecisionRecord:
     parent_decision_id: str | None = None
     changed_by_evidence: tuple[str, ...] = ()
     expires_at: datetime | None = None
+    probabilistic_consensus: ProbabilisticConsensus | None = None
 
     @classmethod
     def new(cls, **values: Any) -> "DecisionRecord":

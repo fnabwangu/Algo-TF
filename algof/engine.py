@@ -9,9 +9,9 @@ from math import sqrt
 from typing import Protocol
 
 from .domain import (
-    Action, AgentResult, DatasetSnapshot, DecisionRecord, EvidenceState,
+    Action, AgentResult, ConfidenceScore, DatasetSnapshot, DecisionBranch, DecisionRecord, EvidenceState,
     ExecutionConstraints, InformationRequest, Observation, ProbabilityEstimate,
-    ProbabilityKind, RecommendationRevision,
+    ProbabilityKind, ProbabilisticConsensus, JudgmentSignal, RecommendationRevision,
 )
 
 
@@ -66,6 +66,31 @@ def empirical_probability(
     )
 
 
+HIGH_CONVICTION_THRESHOLD = 0.75
+LOW_CONVICTION_THRESHOLD = 0.40
+
+
+def evaluate_probabilistic_consensus(signals: tuple[JudgmentSignal, ...]) -> float:
+    """Return the weighted conviction score for independently supplied judgments."""
+    total_weight = sum(signal.weight for signal in signals)
+    if total_weight == 0:
+        return 0.5
+    return sum(signal.confidence.value * signal.weight for signal in signals) / total_weight
+
+
+def human_in_the_loop_escalation(summary: str) -> str:
+    """Create the auditable manual tie-breaking request; this system never executes orders."""
+    return f"Manual tie-break required: {summary}"
+
+
+@dataclass(frozen=True)
+class JudgmentEvaluation:
+    consensus: ProbabilisticConsensus
+    support: tuple[str, ...]
+    oppose: tuple[str, ...]
+    missing: tuple[str, ...]
+
+
 class EvidenceWeightedJudge:
     """A transparent fallback for when a configured LLM judgment adapter is unavailable.
 
@@ -92,35 +117,62 @@ class EvidenceWeightedJudge:
         return requests[:3]
 
     def decide(self, instrument: str, horizon: str, snapshot: DatasetSnapshot,
-               probability: ProbabilityEstimate) -> tuple[Action, float, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+               probability: ProbabilityEstimate) -> JudgmentEvaluation:
         support: list[str] = []
         oppose: list[str] = []
         missing: list[str] = []
-        score = 0
+        signals: list[JudgmentSignal] = []
         for observation in snapshot.observations:
             value = observation.value
             if observation.state in (EvidenceState.MISSING, EvidenceState.STALE, EvidenceState.UNAVAILABLE):
                 missing.append(f"{observation.name}: {observation.state.value}; {observation.effect}")
+                signals.append(JudgmentSignal(observation.name, ConfidenceScore(
+                    0.5, f"{observation.state.value} evidence is neutral and requires uncertainty-aware sizing."
+                )))
                 continue
             if observation.state == EvidenceState.CONFLICTING:
                 oppose.append(f"{observation.name} is conflicting: {observation.effect}")
-                score -= 1
+                signals.append(JudgmentSignal(observation.name, ConfidenceScore(
+                    0.25, f"Conflicting evidence reduces confidence: {observation.effect}"
+                )))
             elif value is True or (isinstance(value, (int, float)) and value > 0):
                 support.append(f"{observation.name}: {observation.effect}")
-                score += 1
+                signals.append(JudgmentSignal(observation.name, ConfidenceScore(
+                    0.9, f"Favorable evidence: {observation.effect}"
+                )))
             elif value is False or (isinstance(value, (int, float)) and value < 0):
                 oppose.append(f"{observation.name}: {observation.effect}")
-                score -= 1
+                signals.append(JudgmentSignal(observation.name, ConfidenceScore(
+                    0.1, f"Unfavorable evidence: {observation.effect}"
+                )))
         if probability.kind == ProbabilityKind.EMPIRICAL and probability.probability is not None:
-            target = 0.5
-            (support if probability.probability >= target else oppose).append(
+            (support if probability.probability >= 0.5 else oppose).append(
                 f"Empirical probability is {probability.probability:.1%} for {probability.event}."
             )
-            score += 1 if probability.probability >= target else -1
-        # Missing evidence reduces exposure but is never a gate.
-        action = Action.ENTER if score > 0 else Action.WAIT
-        quantity = max(0.0, 10.0 - 2.0 * len(missing) - 2.0 * len(oppose)) if action == Action.ENTER else 0.0
-        return action, quantity, tuple(support), tuple(oppose), tuple(missing)
+            signals.append(JudgmentSignal("empirical_outcomes", ConfidenceScore(
+                probability.probability, f"Empirical probability for {probability.event}."
+            ), weight=1.5))
+        else:
+            signals.append(JudgmentSignal("empirical_outcomes", ConfidenceScore(
+                0.5, "No empirical probability is available at the decision cutoff."
+            ), weight=1.5))
+        conviction = evaluate_probabilistic_consensus(tuple(signals))
+        if conviction > HIGH_CONVICTION_THRESHOLD:
+            branch = DecisionBranch.AUTO_EXECUTE
+            escalation = None
+        elif conviction < LOW_CONVICTION_THRESHOLD:
+            branch = DecisionBranch.REJECT
+            escalation = None
+        else:
+            branch = DecisionBranch.ESCALATE
+            escalation = human_in_the_loop_escalation(
+                f"conviction {conviction:.1%} is between the {LOW_CONVICTION_THRESHOLD:.0%} and "
+                f"{HIGH_CONVICTION_THRESHOLD:.0%} routing thresholds."
+            )
+        return JudgmentEvaluation(
+            ProbabilisticConsensus(tuple(signals), conviction, branch, escalation),
+            tuple(support), tuple(oppose), tuple(missing),
+        )
 
 
 class DecisionEngine:
@@ -163,13 +215,16 @@ class DecisionEngine:
         snapshot = DatasetSnapshot.at_cutoff(cutoff, observations)
         initial_snapshot = snapshot
         probability = empirical_probability(f"positive {horizon} return after costs", horizon, cutoff, outcomes)
-        initial_action, initial_quantity, _, _, _ = self.judge.decide(instrument, horizon, snapshot, probability)
+        initial_evaluation = self.judge.decide(instrument, horizon, snapshot, probability)
+        initial_action, initial_quantity = self._route(initial_evaluation.consensus, constraints)
         research_deadline = datetime.now(cutoff.tzinfo) + timedelta(seconds=research_budget_seconds)
         requests = self.judge.request_information(instrument, horizon, snapshot, cutoff, research_deadline)
         agent_results = self._consult(requests, research_budget_seconds)
         additional = [item for result in agent_results for item in result.observations]
         snapshot = DatasetSnapshot.at_cutoff(cutoff, list(snapshot.observations) + additional)
-        action, quantity, support, oppose, missing = self.judge.decide(instrument, horizon, snapshot, probability)
+        evaluation = self.judge.decide(instrument, horizon, snapshot, probability)
+        action, quantity = self._route(evaluation.consensus, constraints)
+        support, oppose, missing = evaluation.support, evaluation.oppose, evaluation.missing
         feasible, issues = constraints.assess(instrument, action, quantity)
         initial = RecommendationRevision(initial_action, initial_quantity, initial_snapshot.snapshot_id,
                                         "Initial judgment before adviser consultation.", cutoff)
@@ -179,7 +234,8 @@ class DecisionEngine:
                          "Consulted evidence changed the recommendation or size.", datetime.now(cutoff.tzinfo)),)
         return DecisionRecord.new(
             instrument=instrument, timestamp=cutoff, horizon=horizon, action=action, quantity=quantity,
-            rationale="Dynamic evidence judgment; research gaps reduce certainty or size rather than acting as gates.",
+            rationale=f"Probabilistic judgment routed to {evaluation.consensus.branch.value}; "
+                      "research gaps reduce certainty or size rather than acting as gates.",
             supporting_factors=support, opposing_factors=oppose, missing_data_implications=missing,
             probabilities=(probability,), information_requests=tuple(requests), agent_results=agent_results,
             alternatives=("WAIT: rejected when available evidence supports limited risk.", "ENTER: rejected when evidence balance is non-positive."),
@@ -190,4 +246,13 @@ class DecisionEngine:
             initial_recommendation=initial, revisions=revisions,
             changed_by_evidence=tuple(observation.name for observation in additional),
             expires_at=cutoff + timedelta(minutes=15),
+            probabilistic_consensus=evaluation.consensus,
         )
+
+    @staticmethod
+    def _route(consensus: ProbabilisticConsensus, constraints: ExecutionConstraints) -> tuple[Action, float]:
+        if consensus.branch != DecisionBranch.AUTO_EXECUTE:
+            return Action.WAIT, 0.0
+        cash_limited = constraints.available_cash / constraints.indicative_price if constraints.indicative_price else 0.0
+        max_allocation = max(0.0, min(constraints.max_position - constraints.current_position, cash_limited))
+        return Action.ENTER, max_allocation * consensus.final_conviction_score

@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 import time
 import unittest
 
-from algof.domain import Action, AgentResult, EvidenceState, ExecutionConstraints, Observation
-from algof.engine import DecisionEngine, HistoricalOutcome, empirical_probability
+from algof.domain import Action, AgentResult, ConfidenceScore, DecisionBranch, EvidenceState, ExecutionConstraints, JudgmentSignal, Observation
+from algof.engine import DecisionEngine, HistoricalOutcome, evaluate_probabilistic_consensus, empirical_probability
 from algof.server import ReviewStore
 
 
@@ -61,6 +61,17 @@ class DynamicDecisionTests(unittest.TestCase):
         record = DecisionEngine([Provider(observations)], []).decide("SPY", "next-session", NOW, constraints(), outcomes)
         self.assertEqual(record.action, Action.ENTER)
         self.assertGreater(record.quantity, 0)
+
+    def test_weighted_consensus_and_routing_are_logged(self):
+        consensus = evaluate_probabilistic_consensus((
+            JudgmentSignal("technical", ConfidenceScore(.9, "Strong trend."), 2),
+            JudgmentSignal("risk", ConfidenceScore(.3, "Elevated volatility."), 1),
+        ))
+        self.assertAlmostEqual(consensus, .7)
+        record = DecisionEngine([Provider([])], []).decide("SPY", "next-session", NOW, constraints(), [])
+        self.assertEqual(record.probabilistic_consensus.branch, DecisionBranch.ESCALATE)
+        self.assertIn("Manual tie-break required", record.probabilistic_consensus.human_escalation_summary)
+        self.assertEqual(record.quantity, 0)
 
     def test_future_observations_and_outcomes_are_excluded(self):
         future = Observation("future_signal", True, EvidenceState.KNOWN, "future", NOW, NOW + timedelta(minutes=1), "Must not appear.")
